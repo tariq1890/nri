@@ -17,11 +17,12 @@
 package version
 
 import (
+	"cmp"
+	"fmt"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
-
-	"golang.org/x/mod/semver"
 )
 
 const (
@@ -33,6 +34,86 @@ const (
 	// nriModulePath is the module we look for to discover the NRI version.
 	nriModulePath = "github.com/containerd/nri"
 )
+
+// version represents a struct type that holds relevant data
+// that constitute a Semantic Version
+type version struct {
+	major int
+	minor int
+	patch int
+	pre   string
+}
+
+func (v version) String() string {
+	if v.pre != "" {
+		return fmt.Sprintf("v%d.%d.%d-%s", v.major, v.minor, v.patch, v.pre)
+	}
+	return fmt.Sprintf("v%d.%d.%d", v.major, v.minor, v.patch)
+}
+
+// compareVersion parses two semver strings into the "version" struct type and compares them.
+// NOTE: It ignores the build metadata when making the comparison
+func compareVersion(a, b string) int {
+	aVer, errA := parseVersion(a)
+	bVer, errB := parseVersion(b)
+	if errA != nil || errB != nil {
+		return cmp.Compare(a, b)
+	}
+
+	if c := cmp.Compare(aVer.major, bVer.major); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(aVer.minor, bVer.minor); c != 0 {
+		return c
+	}
+	if c := cmp.Compare(aVer.patch, bVer.patch); c != 0 {
+		return c
+	}
+	if aVer.pre == "" || bVer.pre == "" {
+		if aVer.pre != "" {
+			return -1
+		} else if bVer.pre != "" {
+			return 1
+		}
+	}
+	return cmp.Compare(aVer.pre, bVer.pre)
+}
+
+func parseVersion(s string) (version, error) {
+	major, rest, _ := strings.Cut(s, ".")
+	minor, patch, _ := strings.Cut(rest, ".")
+
+	var pre string
+	if len(patch) > 0 {
+		patch, pre, _ = strings.Cut(patch, "-")
+		if pre != "" {
+			pre, _, _ = strings.Cut(pre, "+")
+		} else {
+			patch, _, _ = strings.Cut(patch, "+")
+		}
+	}
+
+	var v version
+	var err error
+	if len(major) > 0 {
+		if v.major, err = strconv.Atoi(strings.TrimPrefix(major, "v")); err != nil {
+			return version{}, err
+		}
+	}
+	if len(minor) > 0 {
+		if v.minor, err = strconv.Atoi(minor); err != nil {
+			return version{}, err
+		}
+	}
+	if len(patch) > 0 {
+		if v.patch, err = strconv.Atoi(patch); err != nil {
+			return version{}, err
+		}
+	}
+	v.pre = pre
+
+	return v, nil
+}
 
 // GetFromBuildInfo returns the locally used NRI version. This
 // is taken either from the debug/build info provided by the
@@ -63,8 +144,8 @@ func GetFromBuildInfo() string {
 }
 
 // majorMinorPatch returns the major.minor.patch prefix of the semantic version v.
-func majorMinorPatch(v string) string {
-	return strings.TrimSuffix(strings.TrimSuffix(v, semver.Build(v)), semver.Prerelease(v))
+func majorMinorPatch(v version) string {
+	return fmt.Sprintf("v%d.%d.%d", v.major, v.minor, v.patch)
 }
 
 // FindClosestMatch returns the largest version smaller or equal to a given one.
@@ -76,11 +157,12 @@ func FindClosestMatch(v string, versions []string) string {
 	// obviously not the case. In lack of a better choice, we strip any such
 	// suffix from v before comparison.
 	v = stripGitSuffix(v)
-	semver.Sort(versions)
+
+	slices.SortFunc(versions, compareVersion)
 
 	latest := ""
 	for _, ver := range versions {
-		if semver.Compare(ver, v) > 0 {
+		if compareVersion(ver, v) > 0 {
 			break
 		}
 		latest = ver
@@ -92,17 +174,18 @@ func FindClosestMatch(v string, versions []string) string {
 // We expect a valid git suffix to be of the form "-N-gSHA1[.m], where
 // N is an decimal integer and SHA1 is a hexadecimal integer.
 func stripGitSuffix(version string) string {
-	mmp := majorMinorPatch(version)
-	pre := semver.Prerelease(version)
-	if mmp+pre != version {
+	pv, _ := parseVersion(version)
+	mmp := majorMinorPatch(pv)
+	if pv.String() != version {
 		return version
 	}
 
-	if len(pre) == 0 || pre[0] != '-' {
+	pre := pv.pre
+	if len(pre) == 0 {
 		return version
 	}
 
-	commits, gsha1, ok := strings.Cut(pre[1:], "-")
+	commits, gsha1, ok := strings.Cut(pre, "-")
 	if !ok || len(gsha1) == 0 || gsha1[0] != 'g' {
 		return version
 	}

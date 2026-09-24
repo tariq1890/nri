@@ -178,3 +178,47 @@ func TestFindClosestMatch(t *testing.T) {
 		})
 	}
 }
+
+func TestCompareVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		a    string
+		b    string
+		want int
+	}{
+		{
+			name: "equal semvers",
+			a:    "v1.2.3",
+			b:    "v1.2.3",
+			want: 0,
+		},
+		{
+			name: "semver vs semver with pre-release",
+			a:    "v1.2.3",
+			b:    "v1.2.3-alpha.1",
+			want: 1,
+		},
+		{
+			name: "semver with pre-release vs semver",
+			a:    "v1.2.3-alpha.1",
+			b:    "v1.2.3",
+			want: -1,
+		},
+		{
+			name: "semver with build metadata vs semver",
+			a:    "v1.2.3+build",
+			b:    "v1.2.3",
+			want: 0,
+		},
+		{
+			name: "semver with pre-release and build metadata vs semver",
+			a:    "v1.2.3-alpha.1+build",
+			b:    "v1.2.3-alpha.1",
+			want: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, compareVersion(tc.a, tc.b))
+		})
+	}
+}
